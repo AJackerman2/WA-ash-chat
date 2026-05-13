@@ -45,6 +45,13 @@ export class WhatsAppAdapter implements TransportAdapter {
     const { version, isLatest } = await fetchLatestBaileysVersion();
     logger.info({ version, isLatest }, 'Baileys version resolved');
 
+    // Pairing-code mode: if BOT_PHONE_NUMBER is set and we don't yet have
+    // creds, ask WhatsApp for an 8-char code the user types into their phone.
+    // Less anti-abuse-flag-prone than QR (in observation) and much easier to
+    // surface through a mobile SSH client. If BOT_PHONE_NUMBER is empty, fall
+    // back to QR pairing (still useful for desktop terminals).
+    const usePairingCode = !state.creds.registered && env.BOT_PHONE_NUMBER.length > 0;
+
     this.sock = makeWASocket({
       version,
       auth: state,
@@ -56,10 +63,34 @@ export class WhatsAppAdapter implements TransportAdapter {
 
     this.sock.ev.on('creds.update', saveCreds);
 
+    if (usePairingCode) {
+      // Baileys needs ~3s after socket creation before requestPairingCode
+      // works — the noise handshake has to complete. Conventional delay from
+      // the upstream examples.
+      setTimeout(async () => {
+        try {
+          const phoneNumber = env.BOT_PHONE_NUMBER.replace(/\D/g, '');
+          const code = await this.sock!.requestPairingCode(phoneNumber);
+          const pretty = code.match(/.{1,4}/g)?.join('-') ?? code;
+          logger.info('═══════════════════════════════════════════════');
+          logger.info(`  WhatsApp pairing code: ${pretty}`);
+          logger.info(`  Phone number: +${phoneNumber}`);
+          logger.info('  On the bot phone, open WhatsApp:');
+          logger.info('    Settings → Linked Devices → Link a device →');
+          logger.info('    "Link with phone number instead" →');
+          logger.info(`    enter the code above (${pretty})`);
+          logger.info('═══════════════════════════════════════════════');
+        } catch (err) {
+          logger.error({ err }, 'Failed to request pairing code');
+        }
+      }, 3000);
+    }
+
     this.sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
 
-      if (qr) {
+      // Only print a QR if pairing-code mode wasn't activated.
+      if (qr && !usePairingCode) {
         logger.info('WhatsApp pairing QR — scan from the bot phone now:');
         qrcode.generate(qr, { small: true });
       }

@@ -123,7 +123,15 @@ npm run dev
 npm run build && npm start
 ```
 
-On first run a QR code prints to the terminal. Open WhatsApp on the bot's phone → Settings → Linked Devices → Link a Device → scan. Auth state is saved to `./auth/` and reused across restarts.
+### Pairing the bot's WhatsApp
+
+Two modes — controlled by `BOT_PHONE_NUMBER` in `.env`.
+
+**Pairing code (recommended):** Set `BOT_PHONE_NUMBER` to the bot's E.164 phone number. On first run the log prints an 8-character code like `ABCD-EFGH`. On the bot phone, open WhatsApp → Settings → Linked Devices → Link a device → tap **"Link with phone number instead"** → enter the code. Cleaner output (no ASCII QR mangling on mobile terminals), and seems less prone to WhatsApp's anti-abuse flagging than rapid QR scans.
+
+**QR code (fallback):** Leave `BOT_PHONE_NUMBER` empty. The adapter prints an ASCII QR to the log on first run; scan it from WhatsApp on the bot phone. Works best from a wide desktop terminal.
+
+Either way, auth state is saved to `./auth/` and reused across restarts. Don't pair multiple times in quick succession — WhatsApp can restrict the account for ~6 hours if it looks like spam/bot activity.
 
 ---
 

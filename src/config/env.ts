@@ -35,6 +35,13 @@ export const env = {
   MAX_OUTPUT_TOKENS: optionalInt('MAX_OUTPUT_TOKENS', 1024),
 
   BOT_NAME: optional('BOT_NAME', 'ASH-ai'),
+
+  // E.164 phone number for the bot's WhatsApp account (with or without "+").
+  // When set, the adapter requests an 8-character pairing code on first run
+  // instead of printing a QR. Easier to use from a mobile SSH client and less
+  // likely to trip WhatsApp's anti-abuse than rapid QR re-scans. Leave empty
+  // to fall back to QR pairing.
+  BOT_PHONE_NUMBER: optional('BOT_PHONE_NUMBER', ''),
 } as const;
 
 export type Env = typeof env;
