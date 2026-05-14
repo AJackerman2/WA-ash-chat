@@ -14,6 +14,7 @@ import type { NormalizedMessage, OutboundReply, TransportAdapter } from '../type
 
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 60_000;
+const ADAPTER_VERSION = 'lid-diagnostic-v3';
 
 /**
  * Baileys-backed WhatsApp transport adapter.
@@ -34,6 +35,10 @@ export class WhatsAppAdapter implements TransportAdapter {
   private onMessage: ((msg: NormalizedMessage) => Promise<void>) | null = null;
   private stopping = false;
   private reconnectAttempt = 0;
+  // Dump the FULL raw inbound message exactly once per process lifetime so we
+  // can see every field Baileys ships. Diagnostic only — flip to false to
+  // disable once LID handling is solid.
+  private rawDumpRemaining = 1;
 
   async start(onMessage: (msg: NormalizedMessage) => Promise<void>): Promise<void> {
     this.onMessage = onMessage;
@@ -43,7 +48,10 @@ export class WhatsAppAdapter implements TransportAdapter {
   private async connect(): Promise<void> {
     const { state, saveCreds } = await useMultiFileAuthState(env.AUTH_DIR);
     const { version, isLatest } = await fetchLatestBaileysVersion();
-    logger.info({ version, isLatest }, 'Baileys version resolved');
+    logger.info(
+      { version, isLatest, adapterVersion: ADAPTER_VERSION },
+      'Baileys version resolved',
+    );
 
     // Pairing-code mode: if BOT_PHONE_NUMBER is set and we don't yet have
     // creds, ask WhatsApp for an 8-char code the user types into their phone.
@@ -162,6 +170,29 @@ export class WhatsAppAdapter implements TransportAdapter {
     if (raw.key.remoteJid === 'status@broadcast') return null;
     // Skip groups for Session 1 — only direct 1:1 chats.
     if (raw.key.remoteJid.endsWith('@g.us')) return null;
+
+    // Diagnostic: log compact key info on every inbound, plus a one-time
+    // full dump of the raw message structure so we can identify which field
+    // carries the real phone number for @lid senders.
+    logger.info(
+      {
+        keyFields: Object.keys(raw.key),
+        topLevelFields: Object.keys(raw),
+        remoteJid: raw.key.remoteJid,
+        participant: raw.key.participant,
+        pushName: raw.pushName,
+      },
+      'DIAG: inbound key snapshot',
+    );
+    if (this.rawDumpRemaining > 0) {
+      this.rawDumpRemaining -= 1;
+      // JSON-stringify so nested fields survive Pino's serializer.
+      logger.info(
+        { rawJson: JSON.stringify(raw, (_k, v) =>
+          v instanceof Uint8Array ? `<Buffer:${v.length}>` : v) },
+        'DIAG: first raw inbound message (full dump)',
+      );
+    }
 
     // WhatsApp's "LID" system: in newer protocol versions, some users come
     // through with remoteJid ending in @lid (an opaque local identifier),
