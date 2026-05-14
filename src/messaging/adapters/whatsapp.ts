@@ -163,6 +163,47 @@ export class WhatsAppAdapter implements TransportAdapter {
     // Skip groups for Session 1 — only direct 1:1 chats.
     if (raw.key.remoteJid.endsWith('@g.us')) return null;
 
+    // WhatsApp's "LID" system: in newer protocol versions, some users come
+    // through with remoteJid ending in @lid (an opaque local identifier),
+    // and the actual phone number lives in a separate field (typically
+    // key.senderPn). If we naively split off @lid and treat the prefix as a
+    // phone number, the whitelist lookup will always miss for these users.
+    let bare: string;
+    if (raw.key.remoteJid.endsWith('@lid')) {
+      // Try multiple field names — they vary across Baileys versions and
+      // protocol revisions.
+      const key = raw.key as Record<string, unknown>;
+      const top = raw as unknown as Record<string, unknown>;
+      const candidates: ReadonlyArray<readonly [string, unknown]> = [
+        ['key.senderPn', key.senderPn],
+        ['key.participantPn', key.participantPn],
+        ['key.participant', key.participant],
+        ['senderPn', top.senderPn],
+        ['participantPn', top.participantPn],
+      ];
+      let resolved: { name: string; jid: string } | null = null;
+      for (const [name, val] of candidates) {
+        if (typeof val === 'string' && val.endsWith('@s.whatsapp.net')) {
+          resolved = { name, jid: val };
+          break;
+        }
+      }
+      if (!resolved) {
+        logger.warn(
+          {
+            remoteJid: raw.key.remoteJid,
+            keyFields: Object.keys(raw.key),
+            msgId: raw.key.id,
+          },
+          'Inbound @lid message has no resolvable phone number — skipping',
+        );
+        return null;
+      }
+      bare = resolved.jid.split('@')[0];
+    } else {
+      bare = raw.key.remoteJid.split('@')[0];
+    }
+
     // Extract text. Baileys can deliver text in several block types; cover the
     // common ones. Anything else (images, audio, stickers) is out of scope for
     // Session 1 — we just ignore them.
@@ -176,9 +217,6 @@ export class WhatsAppAdapter implements TransportAdapter {
 
     if (!text || text.trim().length === 0) return null;
 
-    // remoteJid for 1:1 looks like "1234567890@s.whatsapp.net" — strip the
-    // suffix and prepend "+" for E.164.
-    const bare = raw.key.remoteJid.split('@')[0];
     const phoneNumber = `+${bare}`;
 
     return {
