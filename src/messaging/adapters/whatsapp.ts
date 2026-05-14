@@ -165,43 +165,60 @@ export class WhatsAppAdapter implements TransportAdapter {
 
     // WhatsApp's "LID" system: in newer protocol versions, some users come
     // through with remoteJid ending in @lid (an opaque local identifier),
-    // and the actual phone number lives in a separate field (typically
-    // key.senderPn). If we naively split off @lid and treat the prefix as a
-    // phone number, the whitelist lookup will always miss for these users.
+    // and the actual phone number lives in a separate field. If we naively
+    // split off @lid and treat the prefix as a phone number, the whitelist
+    // lookup will always miss for these users.
+    //
+    // Also: even when remoteJid ends in @s.whatsapp.net, the bare value can
+    // sometimes be a LID-style 13+ digit number (not a real phone), so we
+    // try to resolve the real phone for those too.
     let bare: string;
-    if (raw.key.remoteJid.endsWith('@lid')) {
-      // Try multiple field names — they vary across Baileys versions and
-      // protocol revisions.
+    const isLid = raw.key.remoteJid.endsWith('@lid');
+    const initialBare = raw.key.remoteJid.split('@')[0];
+    const looksLikeLid = initialBare.length > 12; // real phones are <=12 digits in E.164
+
+    if (isLid || looksLikeLid) {
       const key = raw.key as Record<string, unknown>;
       const top = raw as unknown as Record<string, unknown>;
       const candidates: ReadonlyArray<readonly [string, unknown]> = [
         ['key.senderPn', key.senderPn],
         ['key.participantPn', key.participantPn],
         ['key.participant', key.participant],
+        ['key.remoteJidAlt', key.remoteJidAlt],
+        ['key.participantAlt', key.participantAlt],
         ['senderPn', top.senderPn],
         ['participantPn', top.participantPn],
+        ['verifiedBizName', top.verifiedBizName],
       ];
       let resolved: { name: string; jid: string } | null = null;
       for (const [name, val] of candidates) {
         if (typeof val === 'string' && val.endsWith('@s.whatsapp.net')) {
-          resolved = { name, jid: val };
-          break;
+          const candidateBare = val.split('@')[0];
+          // Reject if it looks like another LID
+          if (candidateBare.length <= 12) {
+            resolved = { name, jid: val };
+            break;
+          }
         }
       }
       if (!resolved) {
+        // Dump everything we have so we can identify the right field.
         logger.warn(
           {
             remoteJid: raw.key.remoteJid,
-            keyFields: Object.keys(raw.key),
+            keyDump: raw.key,
+            topLevelKeys: Object.keys(raw),
             msgId: raw.key.id,
+            pushName: raw.pushName,
           },
-          'Inbound @lid message has no resolvable phone number — skipping',
+          'Inbound LID/long-id message: cannot resolve real phone number — skipping. Paste this log line to the dev.',
         );
         return null;
       }
+      logger.debug({ from: resolved.name, jid: resolved.jid }, 'Resolved LID → phone number');
       bare = resolved.jid.split('@')[0];
     } else {
-      bare = raw.key.remoteJid.split('@')[0];
+      bare = initialBare;
     }
 
     // Extract text. Baileys can deliver text in several block types; cover the
